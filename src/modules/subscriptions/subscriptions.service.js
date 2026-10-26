@@ -1,24 +1,51 @@
 const prisma = require('../../config/database');
 const { ApiError } = require('../../middlewares/errorHandler');
 const logger = require('../../utils/logger');
+const crypto = require('crypto');
 
-// ─── MOCK RAZORPAY SERVICE ────────────────────────────────────────────────────
-const mockRazorpay = {
-  createOrder: ({ amount, currency = 'INR', planSlug }) => {
+// ─── RAZORPAY SERVICE (Real SDK when keys present, Mock fallback otherwise) ───
+const RAZORPAY_KEY_ID     = process.env.RAZORPAY_KEY_ID;
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
+const IS_LIVE_RAZORPAY    = !!(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET && !RAZORPAY_KEY_ID.includes('HEALTHSAKHI'));
+
+let razorpayInstance = null;
+if (IS_LIVE_RAZORPAY) {
+  try {
+    const Razorpay = require('razorpay');
+    razorpayInstance = new Razorpay({ key_id: RAZORPAY_KEY_ID, key_secret: RAZORPAY_KEY_SECRET });
+    logger.info('[Razorpay] Live SDK initialized.');
+  } catch (e) {
+    logger.warn('[Razorpay] SDK not installed, falling back to mock mode.');
+  }
+}
+
+const razorpayService = {
+  createOrder: async ({ amount, currency = 'INR', planSlug }) => {
+    if (IS_LIVE_RAZORPAY && razorpayInstance) {
+      const order = await razorpayInstance.orders.create({
+        amount,   // already in paise
+        currency,
+        notes: { planSlug, platform: 'HealthSakhi' }
+      });
+      logger.info(`[Razorpay] Live order created: ${order.id}`);
+      return { id: order.id, amount: order.amount, currency: order.currency, status: order.status, planSlug };
+    }
+    // Mock fallback
     const orderId = `order_MOCK_${Date.now()}_${Math.random().toString(36).substr(2, 8).toUpperCase()}`;
     logger.info(`[MockRazorpay] Created order ${orderId} for ₹${amount / 100}`);
-    return {
-      id: orderId,
-      amount,
-      currency,
-      status: 'created',
-      planSlug,
-      notes: { platform: 'HealthSakhi', mode: 'TEST' }
-    };
+    return { id: orderId, amount, currency, status: 'created', planSlug, notes: { platform: 'HealthSakhi', mode: 'TEST' } };
   },
 
   verifyPayment: ({ orderId, paymentId, signature }) => {
-    // Always succeeds in TEST mode
+    if (IS_LIVE_RAZORPAY && RAZORPAY_KEY_SECRET) {
+      // Real HMAC-SHA256 verification
+      const body = `${orderId}|${paymentId}`;
+      const expectedSignature = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET).update(body).digest('hex');
+      const verified = expectedSignature === signature;
+      logger.info(`[Razorpay] Signature verification: ${verified ? 'PASSED' : 'FAILED'}`);
+      return { verified, mode: 'LIVE' };
+    }
+    // Mock: always passes
     logger.info(`[MockRazorpay] Verified payment ${paymentId} for order ${orderId}`);
     return { verified: true, mode: 'TEST' };
   }
@@ -42,33 +69,17 @@ const getPlans = async () => {
   });
   return {
     success: true,
-    plans: plans.map(p => {
-      const isBlurredFeat = (p.features || []).find(f => {
-        const fn = (f.featureName || '').toLowerCase().trim();
-        return fn === 'isblurred' || fn === 'is_blurred' || fn === 'blur';
-      });
-      const isBlurred = isBlurredFeat
-        ? (String(isBlurredFeat.featureValue).toLowerCase().trim() === 'true' || String(isBlurredFeat.featureValue).trim() === '1')
-        : false;
-
-      return {
-        id: p.id,
-        name: p.name,
-        slug: p.slug,
-        price: Number(p.price),
-        originalPrice: p.originalPrice ? Number(p.originalPrice) : null,
-        interval: p.interval,
-        isBlurred,
-        maxAiChatsPerDay: p.maxAiChatsPerDay,
-        advisorCredits: p.advisorCredits,
-        features: p.features
-          .filter(f => {
-            const fn = (f.featureName || '').toLowerCase().trim();
-            return fn !== 'isblurred' && fn !== 'is_blurred' && fn !== 'blur';
-          })
-          .map(f => ({ name: f.featureName, value: f.featureValue }))
-      };
-    })
+    plans: plans.map(p => ({
+      id: p.id,
+      name: p.name,
+      slug: p.slug,
+      price: Number(p.price),
+      originalPrice: p.originalPrice ? Number(p.originalPrice) : null,
+      interval: p.interval,
+      maxAiChatsPerDay: p.maxAiChatsPerDay,
+      advisorCredits: p.advisorCredits,
+      features: p.features.map(f => ({ name: f.featureName, value: f.featureValue }))
+    }))
   };
 };
 
@@ -170,8 +181,8 @@ const createOrder = async (userId, { planSlug, couponCode }) => {
     };
   }
 
-  // Create mock Razorpay order
-  const order = mockRazorpay.createOrder({
+  // Create Razorpay order (live or mock depending on env)
+  const order = await razorpayService.createOrder({
     amount: Math.round(finalAmount * 100), // paise
     currency: 'INR',
     planSlug
@@ -219,8 +230,11 @@ const verifyPayment = async (userId, { orderId, paymentId, signature }) => {
   if (!payment) throw new ApiError(404, 'PAYMENT_NOT_FOUND', 'Payment order not found.');
   if (payment.userId !== userId) throw new ApiError(403, 'FORBIDDEN', 'Payment does not belong to this user.');
 
-  // Mock verify - always succeeds
-  const verified = mockRazorpay.verifyPayment({ orderId, paymentId: paymentId || `pay_MOCK_${Date.now()}`, signature });
+  // Verify payment signature (HMAC check on live, always-pass on mock)
+  const verified = razorpayService.verifyPayment({ orderId, paymentId: paymentId || `pay_MOCK_${Date.now()}`, signature });
+  if (!verified.verified) {
+    throw new ApiError(400, 'PAYMENT_VERIFICATION_FAILED', 'Payment signature verification failed. Please contact support.');
+  }
 
   const plan = await prisma.plan.findFirst({
     where: { slug: payment.planSlug, deletedAt: null }

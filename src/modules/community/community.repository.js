@@ -3,6 +3,11 @@ const prisma = require('../../config/database');
 // ── Circles (Groups) Repository ──
 const getCircles = async () => {
   return await prisma.communityCircle.findMany({
+    include: {
+      _count: {
+        select: { members: true, messages: true }
+      }
+    },
     orderBy: { name: 'asc' }
   });
 };

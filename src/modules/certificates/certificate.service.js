@@ -4,8 +4,12 @@ const PDFDocument = require('pdfkit');
 
 const PLAN_HIERARCHY = {
   'free-sakhi': 1,
+  'access-sakhi': 2,
   'basic-sakhi': 2,
-  'premium-sakhi': 3
+  'fair-value-sakhi': 3,
+  'supporter-sakhi': 4,
+  'patron-sakhi': 5,
+  'premium-sakhi': 4
 };
 
 /**
@@ -48,7 +52,7 @@ async function checkAndAwardCertificates(userId) {
 
     // Level 1: Basic Wellness Certificate
     if (!existingLevels.includes('basic')) {
-      const planEligible = planSlug === 'basic-sakhi' || planSlug === 'premium-sakhi';
+      const planEligible = ['basic-sakhi', 'premium-sakhi', 'access-sakhi', 'fair-value-sakhi', 'supporter-sakhi', 'patron-sakhi'].includes(planSlug);
       if (books >= 5 && logins >= 15 && planEligible) {
         newAwards.push({
           level: 'basic',
@@ -59,7 +63,7 @@ async function checkAndAwardCertificates(userId) {
 
     // Level 2: Advance Wellness Certificate
     if (!existingLevels.includes('advance')) {
-      const planEligible = planSlug === 'basic-sakhi' || planSlug === 'premium-sakhi';
+      const planEligible = ['basic-sakhi', 'premium-sakhi', 'fair-value-sakhi', 'supporter-sakhi', 'patron-sakhi'].includes(planSlug);
       if (books >= 15 && logins >= 30 && planEligible) {
         newAwards.push({
           level: 'advance',
@@ -70,7 +74,7 @@ async function checkAndAwardCertificates(userId) {
 
     // Level 3: Gold Ambassador Certificate
     if (!existingLevels.includes('gold')) {
-      const planEligible = planSlug === 'premium-sakhi';
+      const planEligible = ['premium-sakhi', 'supporter-sakhi', 'patron-sakhi'].includes(planSlug);
       if (books >= 25 && logins >= 30 && referrals >= 10 && planEligible) {
         newAwards.push({
           level: 'gold',
@@ -81,7 +85,7 @@ async function checkAndAwardCertificates(userId) {
 
     // Level 4: Platinum Health Leader Certificate
     if (!existingLevels.includes('platinum')) {
-      const planEligible = planSlug === 'premium-sakhi';
+      const planEligible = ['premium-sakhi', 'patron-sakhi'].includes(planSlug);
       if (books >= 40 && logins >= 60 && referrals >= 25 && planEligible) {
         newAwards.push({
           level: 'platinum',

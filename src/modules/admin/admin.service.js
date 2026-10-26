@@ -289,8 +289,11 @@ const updateUser = async (id, data, adminId) => {
     throw new ApiError(404, 'USER_NOT_FOUND', 'User not found.');
   }
 
-  const oldValues = { isApproved: user.isApproved, isSuspended: user.isSuspended };
+  const oldValues = { phone: user.phone, isApproved: user.isApproved, isSuspended: user.isSuspended };
   const updateData = {};
+  if (data.phone !== undefined) {
+    updateData.phone = data.phone && data.phone.trim() ? data.phone.trim() : null;
+  }
 
   // Map status string to boolean fields
   if (data.status !== undefined) {
@@ -311,14 +314,20 @@ const updateUser = async (id, data, adminId) => {
     });
 
     // Update profile fields
-    if (updated.profile && (data.fullName !== undefined || data.bio !== undefined)) {
+    if (data.fullName !== undefined || data.bio !== undefined) {
       const profileData = {};
-      if (data.fullName !== undefined) profileData.fullName = data.fullName;
+      if (data.fullName !== undefined) profileData.fullName = data.fullName.trim();
       if (data.bio !== undefined) profileData.bio = data.bio;
 
-      await tx.userProfile.update({
-        where: { id: updated.profile.id },
-        data: profileData
+      await tx.userProfile.upsert({
+        where: { userId: id },
+        create: {
+          userId: id,
+          fullName: data.fullName?.trim() || 'Member',
+          bio: data.bio || null,
+          lastActiveDate: new Date()
+        },
+        update: profileData
       });
     }
 
@@ -349,18 +358,24 @@ const updateUser = async (id, data, adminId) => {
     }
 
     // Write audit log entry
-    await tx.auditLog.create({
-      data: {
-        userId: adminId,
-        action: 'USER_UPDATE',
-        targetTable: 'users',
-        targetId: id,
-        changes: {
-          before: oldValues,
-          after: data
-        }
+    if (adminId) {
+      try {
+        await tx.auditLog.create({
+          data: {
+            userId: adminId,
+            action: 'USER_UPDATE',
+            targetTable: 'users',
+            targetId: id,
+            changes: {
+              before: oldValues,
+              after: data
+            }
+          }
+        });
+      } catch (logErr) {
+        logger.warn('Failed to record user update audit log:', logErr.message);
       }
-    });
+    }
 
     return tx.user.findUnique({
       where: { id },
@@ -606,41 +621,29 @@ const updateAdvisor = async (id, data, adminId) => {
  */
 const getPlans = async () => {
   const plans = await prisma.plan.findMany({
-    where: { status: 'ACTIVE', deletedAt: null },
+    where: { deletedAt: null },
     include: { features: true },
     orderBy: { price: 'asc' }
   });
 
   return {
     success: true,
-    plans: plans.map(p => {
-      const isBlurredFeat = (p.features || []).find(f => {
-        const fn = (f.featureName || '').toLowerCase().trim();
-        return fn === 'isblurred' || fn === 'is_blurred' || fn === 'blur';
-      });
-      const isBlurred = isBlurredFeat
-        ? (String(isBlurredFeat.featureValue).toLowerCase().trim() === 'true' || String(isBlurredFeat.featureValue).trim() === '1')
-        : false;
-
-      return {
-        id: p.id,
-        name: p.name,
-        slug: p.slug,
-        price: Number(p.price),
-        originalPrice: p.originalPrice ? Number(p.originalPrice) : null,
-        interval: p.interval,
-        status: isBlurred ? 'BLURRED' : p.status,
-        dbStatus: p.status,
-        isBlurred,
-        maxAiChatsPerDay: p.maxAiChatsPerDay,
-        advisorCredits: p.advisorCredits,
-        features: p.features.map(f => ({
-          id: f.id,
-          name: f.featureName,
-          value: f.featureValue
-        }))
-      };
-    })
+    plans: plans.map(p => ({
+      id: p.id,
+      name: p.name,
+      slug: p.slug,
+      price: Number(p.price),
+      originalPrice: p.originalPrice ? Number(p.originalPrice) : null,
+      interval: p.interval,
+      status: p.status,
+      maxAiChatsPerDay: p.maxAiChatsPerDay,
+      advisorCredits: p.advisorCredits,
+      features: p.features.map(f => ({
+        id: f.id,
+        name: f.featureName,
+        value: f.featureValue
+      }))
+    }))
   };
 };
 
@@ -1032,6 +1035,7 @@ const createUser = async (data, adminId) => {
   const createdUser = await prisma.$transaction(async (tx) => {
     const userPayload = {
       email: data.email,
+      phone: data.phone || null,
       roleId: role.id,
       isApproved: true,
       isSuspended: false,
@@ -1180,6 +1184,7 @@ const createAdvisor = async (data, adminId) => {
   const result = await prisma.$transaction(async (tx) => {
     const userPayload = {
       email: data.email,
+      phone: data.phone || null,
       roleId: role.id,
       isApproved: true,
       isSuspended: false,

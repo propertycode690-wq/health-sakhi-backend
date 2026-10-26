@@ -21,7 +21,9 @@ const getCircles = async (userId) => {
     description: circle.description,
     icon: circle.icon,
     color: circle.color,
-    joined: joinedIds.has(circle.id)
+    joined: joinedIds.has(circle.id),
+    memberCount: circle._count?.members || 0,
+    messageCount: circle._count?.messages || 0
   }));
 };
 

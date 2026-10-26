@@ -1,5 +1,5 @@
 const app = require('./app');
-// Force nodemon reload for GEMINI_API_KEY update and port release
+// Nodemon reloaded with environment variables and synced Prisma schema
 const environment = require('./config/environment');
 const logger = require('./utils/logger');
 const prisma = require('./config/database');
